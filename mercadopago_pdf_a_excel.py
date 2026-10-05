@@ -18,7 +18,7 @@ DATE_RE = re.compile(r"^\d{2}-\d{2}-\d{4}$")
 DATE_START_RE = re.compile(r"^(\d{2}-\d{2}-\d{4})(?:\s+(.*))?$")
 ID_RE = re.compile(r"^\d{10,15}$")
 ID_ANYWHERE_RE = re.compile(r"\b\d{10,15}\b")
-MONEY_RE = re.compile(r"\$\s*-?\d{1,3}(?:\.\d{3})*,\d{2}")
+MONEY_RE = re.compile(r"\$\s*-?(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2}(?!\d)")
 PAGE_RE = re.compile(r"^\d+/\d+$")
 HEADER_LINES = {
     "fecha",
@@ -242,7 +242,7 @@ def filter_valid_movements(movements: Iterable[Movement]) -> list[Movement]:
 
 
 def extract_entradas_total(text: str) -> float | None:
-    match = re.search(r"Entradas:\s*(\$ \d{1,3}(?:\.\d{3})*,\d{2})", text)
+    match = re.search(r"Entradas:\s*(" + MONEY_RE.pattern + r")", text, re.IGNORECASE)
     return parse_money(match.group(1)) if match else None
 
 
@@ -511,15 +511,22 @@ class MercadoPagoExtractorApp:
         top_frame.grid(row=0, column=0, sticky="ew")
         top_frame.columnconfigure(1, weight=1)
 
-        ttk.Button(top_frame, text="Seleccionar PDFs", command=self.select_pdf_files).grid(
+        self.select_files_button = ttk.Button(
+            top_frame, text="Seleccionar PDFs", command=self.select_pdf_files
+        )
+        self.select_files_button.grid(
             row=0, column=0, padx=(0, 8), sticky="w"
         )
-        ttk.Button(
+        self.select_folder_button = ttk.Button(
             top_frame,
             text="Seleccionar carpeta destino",
             command=self.select_output_folder,
-        ).grid(row=0, column=1, padx=(0, 8), sticky="w")
-        ttk.Button(top_frame, text="Limpiar selección", command=self.clear_selection).grid(
+        )
+        self.select_folder_button.grid(row=0, column=1, padx=(0, 8), sticky="w")
+        self.clear_button = ttk.Button(
+            top_frame, text="Limpiar selección", command=self.clear_selection
+        )
+        self.clear_button.grid(
             row=0, column=2, sticky="e"
         )
 
@@ -599,22 +606,38 @@ class MercadoPagoExtractorApp:
             )
             return
 
-        self.generate_button.configure(state="disabled")
-        self.progress.configure(maximum=len(self.pdf_paths), value=0)
+        pdf_paths = tuple(self.pdf_paths)
+        output_folder = self.output_folder
+        self.set_processing_state(True)
+        self.progress.configure(maximum=len(pdf_paths), value=0)
         self.log("Iniciando proceso...")
-        thread = threading.Thread(target=self.generate_excels_from_gui, daemon=True)
+        thread = threading.Thread(
+            target=self.generate_excels_from_gui,
+            args=(pdf_paths, output_folder),
+            daemon=True,
+        )
         thread.start()
 
-    def generate_excels_from_gui(self) -> None:
+    def set_processing_state(self, processing: bool) -> None:
+        state = "disabled" if processing else "normal"
+        for button in (
+            self.generate_button,
+            self.select_files_button,
+            self.select_folder_button,
+            self.clear_button,
+        ):
+            button.configure(state=state)
+
+    def generate_excels_from_gui(self, pdf_paths: tuple[Path, ...], output_folder: Path) -> None:
         generated = 0
         errors = 0
-        total = len(self.pdf_paths)
+        total = len(pdf_paths)
 
-        for index, pdf_path in enumerate(self.pdf_paths, 1):
+        for index, pdf_path in enumerate(pdf_paths, 1):
             self.log_message(f"Procesando: {pdf_path.name}")
             try:
                 movements, warnings = process_pdf(pdf_path)
-                output_path = get_safe_output_path(pdf_path, self.output_folder or Path.cwd())
+                output_path = get_safe_output_path(pdf_path, output_folder)
                 build_excel(movements, output_path)
                 generated += 1
                 self.log_message(f"Archivo procesado correctamente: {pdf_path.name}")
@@ -631,7 +654,7 @@ class MercadoPagoExtractorApp:
         self.log_message(
             f"Proceso finalizado. Archivos generados: {generated}. Archivos con error: {errors}."
         )
-        self.root.after(0, lambda: self.generate_button.configure(state="normal"))
+        self.root.after(0, self.set_processing_state, False)
 
     def log(self, message: str) -> None:
         self.log_text.insert(self.tk.END, f"{message}\n")
