@@ -24,6 +24,7 @@ Alexander Ramones/
 salida_test/
 
 # OS/editor noise
+*.lnk
 .DS_Store
 Thumbs.db
 .idea/
